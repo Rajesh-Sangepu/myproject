@@ -1,10 +1,1 @@
-# AWS Dummy Secrets
-#AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-#AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-# GitHub Personal Access Token (dummy)
-#GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyzAB
-# Google API Key (dummy)
-#GOOGLE_API_KEY=AIzaSyA-1234567890abcdefghijklmnopqrstuvwxyzAB
-# Slack Webhook URL (dummy)
-#SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
 hello
