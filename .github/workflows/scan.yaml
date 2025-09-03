@@ -6,15 +6,10 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  # ----------------------
-  # Secret Scan (Trivy)
-  # ----------------------
   trivy-secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Run Trivy secret scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -24,15 +19,10 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-  # ----------------------
-  # Vulnerability/config Scan (Trivy for repo files)
-  # ----------------------
   trivy-vuln-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Run Trivy repo scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -41,15 +31,10 @@ jobs:
           exit-code: '1'
           ignore-unfixed: true
 
-  # ----------------------
-  # Python Code Scan
-  # ----------------------
   python-code-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Check for Python files
         id: check-python
         run: |
@@ -57,6 +42,7 @@ jobs:
             echo "python_found=true" >> $GITHUB_ENV
           else
             echo "python_found=false" >> $GITHUB_ENV
+          fi
 
       - name: Python syntax check
         if: env.python_found == 'true'
@@ -83,15 +69,10 @@ jobs:
         if: env.python_found == 'true'
         run: bandit -r . -ll -iii
 
-  # ----------------------
-  # Java Code Scan (Plain Java)
-  # ----------------------
   java-code-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Check for Java files
         id: check-java
         run: |
@@ -99,6 +80,7 @@ jobs:
             echo "java_found=true" >> $GITHUB_ENV
           else
             echo "java_found=false" >> $GITHUB_ENV
+          fi
 
       - name: Set up JDK
         if: env.java_found == 'true'
@@ -119,15 +101,10 @@ jobs:
             java -cp build "$classname" || true
           done
 
-  # ----------------------
-  # Maven Dependency Vulnerability Scan (pom.xml) using OWASP Dependency-Check
-  # ----------------------
   dependency-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Set up Java
         uses: actions/setup-java@v3
         with:
@@ -148,4 +125,5 @@ jobs:
             --scan . \
             --format "HTML" \
             --out dependency-check-report \
-            --nvdApiKey $NVD_API_KEY
+            --nvdApiKey $NVD_API_KEY \
+            --cveValidForHours 24
