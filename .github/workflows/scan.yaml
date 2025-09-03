@@ -47,8 +47,7 @@ jobs:
       - name: Check for Python files
         id: check-python
         run: |
-          shopt -s globstar
-          if ls **/*.py 1> /dev/null 2>&1; then
+          if find . -name "*.py" | grep -q .; then
             echo "python_found=true" >> $GITHUB_ENV
           else
             echo "python_found=false" >> $GITHUB_ENV
