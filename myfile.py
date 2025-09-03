@@ -1,6 +1,6 @@
 # myfile.py
 
-def greet_user(name: str) -> str
+def greet_user(name: str) -> str:
     """Return a greeting message."""
     return f"Hello, {name}!"
 
