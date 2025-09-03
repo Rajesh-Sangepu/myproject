@@ -121,9 +121,22 @@ jobs:
         uses: actions/cache@v3
         with:
           path: dependency-check/data
-          key: ${{ runner.os }}-dependency-check-${{ hashFiles('pom.xml') }}
+          key: ${{ runner.os }}-dependency-check-db
 
-      - name: Run Dependency-Check
+      # Initialize DB if missing
+      - name: Initialize Dependency-Check DB
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          ./dependency-check/dependency-check/bin/dependency-check.sh \
+            --project "Init DB" \
+            --scan . \
+            --format "HTML" \
+            --out dependency-check-init \
+            --nvdApiKey $NVD_API_KEY
+
+      - name: Run Dependency-Check using cached DB
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
