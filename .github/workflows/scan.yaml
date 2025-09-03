@@ -12,9 +12,7 @@ jobs:
   trivy-secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Run Trivy secret scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -25,14 +23,12 @@ jobs:
           ignore-unfixed: true
 
   # ----------------------
-  # Vulnerability/config Scan (Trivy for repo files)
+  # Vulnerability/config Scan (Trivy)
   # ----------------------
   trivy-vuln-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Run Trivy repo scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -47,9 +43,7 @@ jobs:
   python-code-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Check for Python files
         id: check-python
         run: |
@@ -58,12 +52,9 @@ jobs:
             echo "python_found=true" >> $GITHUB_ENV
           else
             echo "python_found=false" >> $GITHUB_ENV
-          fi
-
       - name: Python syntax check
         if: env.python_found == 'true'
         run: python -m py_compile $(find . -name "*.py")
-
       - name: Run Python files
         if: env.python_found == 'true'
         run: |
@@ -72,15 +63,12 @@ jobs:
             echo "Running $file"
             python "$file"
           done
-
       - name: Install Flake8 & Bandit
         if: env.python_found == 'true'
         run: pip install flake8 bandit
-
       - name: Run Flake8 linting (ignore blank line rules)
         if: env.python_found == 'true'
         run: flake8 . --ignore=E302,E305,W391
-
       - name: Run Bandit security scan
         if: env.python_found == 'true'
         run: bandit -r . -ll -iii
@@ -91,9 +79,7 @@ jobs:
   java-code-scan:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Check for Java files
         id: check-java
         run: |
@@ -101,15 +87,12 @@ jobs:
             echo "java_found=true" >> $GITHUB_ENV
           else
             echo "java_found=false" >> $GITHUB_ENV
-          fi
-
       - name: Set up JDK
         if: env.java_found == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Compile and run each Java file individually
         if: env.java_found == 'true'
         run: |
@@ -123,25 +106,31 @@ jobs:
           done
 
   # ----------------------
-  # Maven Dependency Vulnerability Scan (pom.xml) using OWASP Dependency-Check
+  # Maven Dependency Vulnerability Scan (pom.xml)
   # ----------------------
   dependency-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Set up Java
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install OWASP Dependency-Check
+      - name: Install OWASP Dependency-Check v12.1.0
         run: |
-          curl -L -o dependency-check.zip https://github.com/jeremylong/DependencyCheck/releases/download/v8.3.1/dependency-check-8.3.1-release.zip
+          curl -L -o dependency-check.zip https://github.com/jeremylong/DependencyCheck/releases/download/v12.1.0/dependency-check-12.1.0-release.zip
           unzip dependency-check.zip -d dependency-check
 
       - name: Run Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
-          ./dependency-check/dependency-check/bin/dependency-check.sh --project "My Maven Project" --scan . --format "HTML" --out dependency-check-report
+          ./dependency-check/dependency-check/bin/dependency-check.sh \
+            --project "My Maven Project" \
+            --scan . \
+            --format "HTML" \
+            --out dependency-check-report \
+            --failOnCVSS 7 \
+            --nvdApiKey $NVD_API_KEY
