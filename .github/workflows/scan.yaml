@@ -23,8 +23,8 @@ jobs:
         with:
           scan-type: fs
           scanners: secret
-          format: sarif
-          output: trivy-results.sarif
+          format: json
+          output: trivy-secret-results.json
           exit-code: '1'
 
   # ----------------------
@@ -38,12 +38,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Trivy vulnerability scan
+      - name: Run Trivy repo scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: repo
-          format: sarif
-          output: trivy-vuln-results.sarif
+          format: json
+          output: trivy-vuln-results.json
           exit-code: '0'
 
       - name: Fail based on severity & fix status
@@ -51,15 +51,12 @@ jobs:
           set -e
           echo "Checking Trivy vulnerabilities..."
           jq -e '
-            .runs[].results[] |
+            .Results[]?.Vulnerabilities[] |
             select(
-              (.level == "error" or .level == "warning") and
-              (
-                (.properties.fixed != null and .properties.fixed != "") or
-                (.level == "error")
-              )
+              (.Severity=="CRITICAL" or .Severity=="HIGH") or
+              (.FixedVersion != null and .FixedVersion != "")
             )
-          ' trivy-vuln-results.sarif > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
+          ' trivy-vuln-results.json > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
 
   # ----------------------
   # Python Code Scan
@@ -98,12 +95,6 @@ jobs:
         if: env.python_found == 'true'
         run: bandit -r . -f json -o bandit-results.json || true
 
-      - name: Convert Bandit JSON to SARIF
-        if: env.python_found == 'true'
-        run: |
-          python -m pip install --user bandit-sarif-formatter
-          $HOME/.local/bin/bandit-sarif-formatter bandit-results.json bandit-results.sarif
-
   # ----------------------
   # Java Code Scan
   # ----------------------
@@ -135,8 +126,8 @@ jobs:
         if: env.java_found == 'true'
         run: |
           mvn com.github.spotbugs:spotbugs-maven-plugin:4.7.3.4:spotbugs \
-              -Dspotbugs.sarifOutput=true \
-              -Dspotbugs.sarifOutputFile=spotbugs.sarif || true
+              -Dspotbugs.jsonOutput=true \
+              -Dspotbugs.jsonOutputFile=spotbugs.json || true
 
   # ----------------------
   # Dependency-Check
@@ -171,31 +162,16 @@ jobs:
           ./dependency-check/dependency-check/bin/dependency-check.sh \
             --project "My Maven Project" \
             --scan . \
-            --format "SARIF" \
+            --format "JSON" \
             --out dependency-check-report \
             $API_ARG \
             --cveValidForHours 24 \
             --noupdate || true
 
-      - name: Fail based on severity & fix status
-        run: |
-          set -e
-          echo "Checking Dependency-Check vulnerabilities..."
-          jq -e '
-            .runs[].results[] |
-            select(
-              (.level == "error" or .level == "warning") and
-              (
-                (.properties.fixVersion != null and .properties.fixVersion != "") or
-                (.level == "error")
-              )
-            )
-          ' dependency-check-report/dependency-check-report.sarif > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
-
   # ----------------------
-  # Security Summary & SARIF Upload
+  # Generate JSON Summary
   # ----------------------
-  security-summary:
+  generate-summary:
     runs-on: ubuntu-latest
     needs: [trivy-secret-scan, trivy-vuln-scan, python-code-scan, java-code-scan, dependency-check]
     if: always()
@@ -205,46 +181,64 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Ensure Git repository exists
+      - name: Prepare scan results folder
         run: |
-          if [ ! -d .git ]; then
-            git init
-            git remote add origin ${{ github.server_url }}/${{ github.repository }}
-            git fetch --depth=1 origin ${{ github.sha }}
-            git checkout FETCH_HEAD
-          fi
+          mkdir -p scan-results
+          [ -f trivy-secret-results.json ] && mv trivy-secret-results.json scan-results/
+          [ -f trivy-vuln-results.json ] && mv trivy-vuln-results.json scan-results/
+          [ -f bandit-results.json ] && mv bandit-results.json scan-results/
+          [ -f dependency-check-report/dependency-check-report.json ] && mv dependency-check-report/dependency-check-report.json scan-results/
+          [ -f spotbugs.json ] && mv spotbugs.json scan-results/
 
-      - name: Merge SARIF reports
+      - name: Generate summary.json
         run: |
-          files=()
-          for f in trivy-results.sarif trivy-vuln-results.sarif bandit-results.sarif dependency-check-report/dependency-check-report.sarif spotbugs.sarif; do
-            [ -f "$f" ] && files+=("$f")
-          done
-
-          if [ ${#files[@]} -gt 0 ]; then
-            jq -s '{
-              "version": "2.1.0",
-              "runs": (.[].runs | add)
-            }' "${files[@]}" > combined-security-report.sarif
-          else
-            echo '{"version":"2.1.0","runs":[]}' > combined-security-report.sarif
-          fi
-
-      - name: Print Security Summary
-        run: |
-          echo "🔒 Security Summary:"
-          jq -r '
-            .runs[].results[]?.level
-          ' combined-security-report.sarif | sort | uniq -c | while read count level; do
-            case $level in
-              note) severity=LOW;;
-              warning) severity=MEDIUM;;
-              error) severity=HIGH/CRITICAL;;
-            esac
-            echo "  $severity : $count"
-          done
-
-      - name: Upload combined SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: combined-security-report.sarif
+          python3 << 'EOF'
+          import json, glob
+          summary = {"results": []}
+          for file in glob.glob("scan-results/*.json"):
+              with open(file) as f:
+                  data = json.load(f)
+                  scanner = file.split("/")[-1].split(".")[0]
+                  if scanner == "bandit":
+                      for r in data.get("results", []):
+                          summary["results"].append({
+                              "scanner": "bandit",
+                              "file": r.get("filename"),
+                              "issue": r.get("issue_text"),
+                              "severity": r.get("issue_severity"),
+                              "confidence": r.get("issue_confidence"),
+                              "fixed": False
+                          })
+                  elif scanner == "trivy" or scanner=="trivy-secret-results":
+                      for r in data.get("Results", []):
+                          for vuln in r.get("Vulnerabilities", []):
+                              summary["results"].append({
+                                  "scanner": "trivy",
+                                  "file": vuln.get("PkgName"),
+                                  "issue": vuln.get("VulnerabilityID"),
+                                  "severity": vuln.get("Severity"),
+                                  "fixed": vuln.get("FixedVersion") not in [None, ""]
+                              })
+                  elif scanner == "dependency-check-report":
+                      for r in data.get("dependencies", []):
+                          for vuln in r.get("vulnerabilities", []):
+                              summary["results"].append({
+                                  "scanner": "dependency-check",
+                                  "file": r.get("fileName"),
+                                  "issue": vuln.get("name"),
+                                  "severity": vuln.get("severity"),
+                                  "fixed": vuln.get("fixedIn") not in [None, ""]
+                              })
+                  elif scanner == "spotbugs":
+                      for bug in data.get("BugCollection", {}).get("BugInstance", []):
+                          summary["results"].append({
+                              "scanner": "spotbugs",
+                              "file": bug.get("Class", {}).get("ClassName"),
+                              "issue": bug.get("Type"),
+                              "severity": bug.get("Priority"),
+                              "fixed": False
+                          })
+          with open("summary.json", "w") as out:
+              json.dump(summary, out, indent=2)
+          print("✅ JSON summary generated: summary.json")
+          EOF
