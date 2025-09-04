@@ -6,7 +6,6 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-
   # ----------------------
   # Trivy Secret Scan
   # ----------------------
@@ -15,48 +14,48 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Run Trivy secret scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scanners: secret
-          format: json
-          output: trivy-secret-results.json
-          exit-code: '1'
+          format: table
+          exit-code: '0'
+      - name: Fail Trivy secret scan based on rules
+        run: |
+          trivy fs --format json . > trivy-secret.json
+          # Fail HIGH/CRITICAL or any LOW/MEDIUM that has fix
+          jq '.Results[]?.Vulnerabilities[] | select((.Severity=="CRITICAL" or .Severity=="HIGH") or (.Severity=="LOW" or .Severity=="MEDIUM") and (.FixedVersion!=null and .FixedVersion!=""))' trivy-secret.json
+          if [ $? -eq 0 ]; then
+            echo "❌ Failing due to HIGH/CRITICAL or fixable LOW/MEDIUM issues"
+            exit 1
+          else
+            echo "✅ No blocking vulnerabilities"
+          fi
 
   # ----------------------
-  # Trivy Vulnerability Scan
+  # Trivy Vulnerability Scan for repo files
   # ----------------------
   trivy-vuln-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Run Trivy repo scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: repo
-          format: json
-          output: trivy-vuln-results.json
+          format: table
           exit-code: '0'
-
-      - name: Fail based on severity & fix status
+      - name: Fail Trivy repo scan based on rules
         run: |
-          set -e
-          echo "Checking Trivy vulnerabilities..."
-          jq -e '
-            .Results[]?.Vulnerabilities[] |
-            select(
-              (.Severity=="CRITICAL" or .Severity=="HIGH") or
-              (.FixedVersion != null and .FixedVersion != "")
-            )
-          ' trivy-vuln-results.json > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
+          trivy repo --format json . > trivy-repo.json
+          jq '.Results[]?.Vulnerabilities[] | select((.Severity=="CRITICAL" or .Severity=="HIGH") or (.Severity=="LOW" or .Severity=="MEDIUM") and (.FixedVersion!=null and .FixedVersion!=""))' trivy-repo.json
+          if [ $? -eq 0 ]; then
+            echo "❌ Failing due to HIGH/CRITICAL or fixable LOW/MEDIUM issues"
+            exit 1
+          else
+            echo "✅ No blocking vulnerabilities"
 
   # ----------------------
   # Python Code Scan
@@ -66,9 +65,6 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Find Python files
         id: check-python
         run: |
@@ -77,23 +73,33 @@ jobs:
             echo "python_found=true" >> $GITHUB_ENV
           else
             echo "python_found=false" >> $GITHUB_ENV
-          fi
-
       - name: Python syntax check
         if: env.python_found == 'true'
         run: python -m py_compile $(find . -name "*.py")
-
+      - name: Run Python files
+        if: env.python_found == 'true'
+        run: |
+          set -e
+          for file in $(find . -name "*.py"); do
+            echo "Running $file"
+            python "$file"
+          done
       - name: Install Flake8 & Bandit
         if: env.python_found == 'true'
-        run: pip install flake8 bandit bandit-sarif-formatter
-
-      - name: Run Flake8 linting
+        run: pip install flake8 bandit
+      - name: Run Flake8 linting (ignore blank lines)
         if: env.python_found == 'true'
         run: flake8 . --ignore=E302,E305,W391
-
-      - name: Run Bandit security scan
+      - name: Run Bandit and fail based on rules
         if: env.python_found == 'true'
-        run: bandit -r . -f json -o bandit-results.json || true
+        run: |
+          bandit -r . -ll -iii -f json -o bandit-results.json || true
+          jq '.results[] | select((.issue_severity=="HIGH" or .issue_severity=="CRITICAL") or (.issue_severity=="LOW" or .issue_severity=="MEDIUM"))' bandit-results.json
+          if [ $? -eq 0 ]; then
+            echo "❌ Failing due to HIGH/CRITICAL or fixable LOW/MEDIUM issues"
+            exit 1
+          else
+            echo "✅ No blocking Bandit issues"
 
   # ----------------------
   # Java Code Scan
@@ -103,9 +109,6 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Check for Java files
         id: check-java
         run: |
@@ -113,21 +116,20 @@ jobs:
             echo "java_found=true" >> $GITHUB_ENV
           else
             echo "java_found=false" >> $GITHUB_ENV
-          fi
-
       - name: Setup JDK
         if: env.java_found == 'true'
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '17'
-
-      - name: Run SpotBugs via Maven
+      - name: Compile & run Java files
         if: env.java_found == 'true'
         run: |
-          mvn com.github.spotbugs:spotbugs-maven-plugin:4.7.3.4:spotbugs \
-              -Dspotbugs.jsonOutput=true \
-              -Dspotbugs.jsonOutputFile=spotbugs.json || true
+          mkdir -p build
+          for file in $(find . -name "*.java"); do
+            classname=$(basename "$file" .java)
+            javac -d build "$file"
+            java -cp build "$classname" || true
 
   # ----------------------
   # Dependency-Check
@@ -139,21 +141,16 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Install OWASP Dependency-Check
         run: |
           curl -L -o dependency-check.zip https://github.com/jeremylong/DependencyCheck/releases/download/v8.3.1/dependency-check-8.3.1-release.zip
           unzip dependency-check.zip -d dependency-check
-
-      - name: Run Dependency-Check
+      - name: Run Dependency-Check and fail on HIGH/CRITICAL and fixable LOW/MEDIUM
         run: |
           API_ARG=""
           if [ -n "$NVD_API_KEY" ]; then
@@ -162,83 +159,10 @@ jobs:
           ./dependency-check/dependency-check/bin/dependency-check.sh \
             --project "My Maven Project" \
             --scan . \
-            --format "JSON" \
+            --format "HTML" \
             --out dependency-check-report \
             $API_ARG \
             --cveValidForHours 24 \
             --noupdate || true
-
-  # ----------------------
-  # Generate JSON Summary
-  # ----------------------
-  generate-summary:
-    runs-on: ubuntu-latest
-    needs: [trivy-secret-scan, trivy-vuln-scan, python-code-scan, java-code-scan, dependency-check]
-    if: always()
-    steps:
-      - name: Checkout PR code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Prepare scan results folder
-        run: |
-          mkdir -p scan-results
-          [ -f trivy-secret-results.json ] && mv trivy-secret-results.json scan-results/
-          [ -f trivy-vuln-results.json ] && mv trivy-vuln-results.json scan-results/
-          [ -f bandit-results.json ] && mv bandit-results.json scan-results/
-          [ -f dependency-check-report/dependency-check-report.json ] && mv dependency-check-report/dependency-check-report.json scan-results/
-          [ -f spotbugs.json ] && mv spotbugs.json scan-results/
-
-      - name: Generate summary.json
-        run: |
-          python3 << 'EOF'
-          import json, glob
-          summary = {"results": []}
-          for file in glob.glob("scan-results/*.json"):
-              with open(file) as f:
-                  data = json.load(f)
-                  scanner = file.split("/")[-1].split(".")[0]
-                  if scanner == "bandit":
-                      for r in data.get("results", []):
-                          summary["results"].append({
-                              "scanner": "bandit",
-                              "file": r.get("filename"),
-                              "issue": r.get("issue_text"),
-                              "severity": r.get("issue_severity"),
-                              "confidence": r.get("issue_confidence"),
-                              "fixed": False
-                          })
-                  elif scanner == "trivy" or scanner=="trivy-secret-results":
-                      for r in data.get("Results", []):
-                          for vuln in r.get("Vulnerabilities", []):
-                              summary["results"].append({
-                                  "scanner": "trivy",
-                                  "file": vuln.get("PkgName"),
-                                  "issue": vuln.get("VulnerabilityID"),
-                                  "severity": vuln.get("Severity"),
-                                  "fixed": vuln.get("FixedVersion") not in [None, ""]
-                              })
-                  elif scanner == "dependency-check-report":
-                      for r in data.get("dependencies", []):
-                          for vuln in r.get("vulnerabilities", []):
-                              summary["results"].append({
-                                  "scanner": "dependency-check",
-                                  "file": r.get("fileName"),
-                                  "issue": vuln.get("name"),
-                                  "severity": vuln.get("severity"),
-                                  "fixed": vuln.get("fixedIn") not in [None, ""]
-                              })
-                  elif scanner == "spotbugs":
-                      for bug in data.get("BugCollection", {}).get("BugInstance", []):
-                          summary["results"].append({
-                              "scanner": "spotbugs",
-                              "file": bug.get("Class", {}).get("ClassName"),
-                              "issue": bug.get("Type"),
-                              "severity": bug.get("Priority"),
-                              "fixed": False
-                          })
-          with open("summary.json", "w") as out:
-              json.dump(summary, out, indent=2)
-          print("✅ JSON summary generated: summary.json")
-          EOF
+          # Fail on HIGH/CRITICAL or fixable LOW/MEDIUM
+          grep -i "Critical\|High\|Low\|Medium" dependency-check-report/dependency-check-report.html && echo "❌ Vulnerabilities found!" && exit 1 || echo "✅ No blocking Dependency-Check issues"
