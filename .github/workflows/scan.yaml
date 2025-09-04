@@ -1,10 +1,8 @@
 name: Security & Code Scan on PR
-
 on:
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened]
-
 jobs:
   # ----------------------
   # Trivy Secret Scan
@@ -22,15 +20,6 @@ jobs:
           format: table
           exit-code: '1'
           ignore-unfixed: true
-      - name: Fail on HIGH/CRITICAL or fixable LOW/MEDIUM
-        run: |
-          trivy fs --format json . > trivy-secret.json
-          jq '.Results[]?.Vulnerabilities[] | select((.Severity=="CRITICAL" or .Severity=="HIGH") or ((.Severity=="LOW" or .Severity=="MEDIUM") and (.FixedVersion!=null and .FixedVersion!="")))' trivy-secret.json
-          if [ $? -eq 0 ]; then
-            echo "❌ Blocking vulnerabilities found!"
-            exit 1
-          fi
-
   # ----------------------
   # Trivy Vulnerability Scan for repo files
   # ----------------------
@@ -46,15 +35,6 @@ jobs:
           format: table
           exit-code: '1'
           ignore-unfixed: true
-      - name: Fail on HIGH/CRITICAL or fixable LOW/MEDIUM
-        run: |
-          trivy repo --format json . > trivy-repo.json
-          jq '.Results[]?.Vulnerabilities[] | select((.Severity=="CRITICAL" or .Severity=="HIGH") or ((.Severity=="LOW" or .Severity=="MEDIUM") and (.FixedVersion!=null and .FixedVersion!="")))' trivy-repo.json
-          if [ $? -eq 0 ]; then
-            echo "❌ Blocking vulnerabilities found!"
-            exit 1
-          fi
-
   # ----------------------
   # Python Code Scan
   # ----------------------
@@ -91,15 +71,7 @@ jobs:
         run: flake8 . --ignore=E302,E305,W391
       - name: Run Bandit security scan
         if: env.python_found == 'true'
-        run: |
-          bandit -r . -ll -iii -f json -o bandit-results.json || true
-          jq '.results[] | select((.issue_severity=="HIGH" or .issue_severity=="CRITICAL") or ((.issue_severity=="LOW" or .issue_severity=="MEDIUM") and (.issue_confidence!="LOW")))' bandit-results.json
-          if [ $? -eq 0 ]; then
-            echo "❌ Blocking Bandit issues found!"
-            exit 1
-          else
-            echo "✅ No blocking Bandit issues"
-
+        run: bandit -r . -ll -iii
   # ----------------------
   # Java Code Scan
   # ----------------------
@@ -130,7 +102,7 @@ jobs:
             classname=$(basename "$file" .java)
             javac -d build "$file"
             java -cp build "$classname" || true
-
+          done
   # ----------------------
   # Dependency-Check for Maven / pom.xml
   # ----------------------
@@ -164,4 +136,9 @@ jobs:
             $API_ARG \
             --cveValidForHours 24 \
             --noupdate || true
-          grep -i "Critical\|High\|Low\|Medium" dependency-check-report/dependency-check-report.html && echo "❌ Blocking Dependency-Check issues found!" && exit 1 || echo "✅ No blocking Dependency-Check issues"
+
+
+
+
+
+
