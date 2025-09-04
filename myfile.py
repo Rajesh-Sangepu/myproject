@@ -10,5 +10,6 @@ print("The sum is:", result)
 for i in range(3):
     print("Iteration:", i)
 
-# Intentional error on the last line (undefined variable)
-print("The value of x is:", x)  # ❌ NameError: name 'x' is not defined
+# Correct last line (define x before using it)
+x = 42
+print("The value of x is:", x)
