@@ -13,7 +13,3 @@ for i in range(3):
 # Correct last line (define x before using it)
 x = 42
 print("The value of x is:", x)
-
-
-
-
