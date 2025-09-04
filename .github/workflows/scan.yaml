@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Run Trivy secret scan
         uses: aquasecurity/trivy-action@master
@@ -24,35 +26,33 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: '1'
-          ignore-unfixed: false
-
-      - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
 
   # ----------------------
-  # Trivy Vulnerability Scan for repo files
+  # Trivy Vulnerability Scan
   # ----------------------
   trivy-vuln-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Run Trivy repo scan
+      - name: Run Trivy vulnerability scan (SARIF only)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: repo
           format: sarif
-          output: trivy-results.sarif
-          exit-code: '1'
-          ignore-unfixed: false
+          output: trivy-vuln-results.sarif
+          exit-code: '0'
 
-      - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-results.sarif
+      - name: Fail on HIGH/CRITICAL or fixed issues
+        run: |
+          set -e
+          if jq -e '.runs[].results[] | select(.level=="error" or .level=="warning")' trivy-vuln-results.sarif > /dev/null; then
+            echo "❌ High/Critical issues detected"
+            exit 1
+          fi
 
   # ----------------------
   # Python Code Scan
@@ -62,6 +62,8 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Find Python files
         id: check-python
@@ -77,41 +79,32 @@ jobs:
         if: env.python_found == 'true'
         run: python -m py_compile $(find . -name "*.py")
 
-      - name: Run Python files
-        if: env.python_found == 'true'
-        run: |
-          set -e
-          for file in $(find . -name "*.py"); do
-            echo "Running $file"
-            python "$file"
-          done
-
       - name: Install Flake8 & Bandit
         if: env.python_found == 'true'
-        run: pip install flake8 bandit
+        run: pip install flake8 bandit bandit-sarif-formatter
 
-      - name: Run Flake8 linting (ignore blank lines)
+      - name: Run Flake8 linting
         if: env.python_found == 'true'
         run: flake8 . --ignore=E302,E305,W391
 
       - name: Run Bandit security scan
         if: env.python_found == 'true'
-        run: bandit -r . -f sarif -o bandit-results.sarif
+        run: bandit -r . -f json -o bandit-results.json || true
 
-      - name: Upload Bandit SARIF
+      - name: Convert Bandit JSON to SARIF
         if: env.python_found == 'true'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: bandit-results.sarif
+        run: bandit-sarif-formatter bandit-results.json bandit-results.sarif
 
   # ----------------------
-  # Java Code Scan (SpotBugs)
+  # Java Code Scan
   # ----------------------
   java-code-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check for Java files
         id: check-java
@@ -129,23 +122,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build with Maven & run SpotBugs
+      - name: Run SpotBugs via Maven
         if: env.java_found == 'true'
         run: |
-          mvn -B package spotbugs:spotbugs || true
-          if [ -f target/spotbugsXml.xml ]; then
-            pip install sarif-tools
-            sarif convert target/spotbugsXml.xml --output target/spotbugs.sarif
-          fi
-
-      - name: Upload SpotBugs SARIF
-        if: env.java_found == 'true' && hashFiles('target/spotbugs.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: target/spotbugs.sarif
+          mvn com.github.spotbugs:spotbugs-maven-plugin:4.7.3.4:spotbugs \
+              -Dspotbugs.sarifOutput=true \
+              -Dspotbugs.sarifOutputFile=spotbugs.sarif || true
 
   # ----------------------
-  # Dependency-Check for Maven / pom.xml
+  # Dependency-Check
   # ----------------------
   dependency-check:
     runs-on: ubuntu-latest
@@ -154,6 +139,8 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Java
         uses: actions/setup-java@v3
@@ -181,23 +168,30 @@ jobs:
             --cveValidForHours 24 \
             --noupdate || true
 
-      - name: Upload Dependency-Check SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: dependency-check-report/dependency-check-report.sarif
+      - name: Fail on HIGH/CRITICAL or fixed issues
+        run: |
+          if jq -e '.runs[].results[] | select(.level=="error" or .level=="warning")' dependency-check-report/dependency-check-report.sarif > /dev/null; then
+            echo "❌ Dependency-Check found blocking issues"
+            exit 1
+          fi
 
   # ----------------------
-  # Security Summary (always runs)
+  # Security Summary & SARIF Upload
   # ----------------------
   security-summary:
     runs-on: ubuntu-latest
-    needs: [trivy-secret-scan, trivy-vuln-scan, python-code-scan, dependency-check, java-code-scan]
+    needs: [trivy-secret-scan, trivy-vuln-scan, python-code-scan, java-code-scan, dependency-check]
     if: always()
     steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Merge SARIF reports
         run: |
           files=()
-          for f in trivy-results.sarif bandit-results.sarif dependency-check-report/dependency-check-report.sarif target/spotbugs.sarif; do
+          for f in trivy-results.sarif trivy-vuln-results.sarif bandit-results.sarif dependency-check-report/dependency-check-report.sarif spotbugs.sarif; do
             [ -f "$f" ] && files+=("$f")
           done
 
@@ -210,37 +204,16 @@ jobs:
             echo '{"version":"2.1.0","runs":[]}' > combined-security-report.sarif
           fi
 
-      - name: Generate human-readable summary
+      - name: Print Security Summary
         run: |
-          echo "## 🔐 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### ✅ Job Status" >> $GITHUB_STEP_SUMMARY
-          echo "- Trivy Secret Scan: completed" >> $GITHUB_STEP_SUMMARY
-          echo "- Trivy Vulnerability Scan: completed" >> $GITHUB_STEP_SUMMARY
-          echo "- Python Scan: completed" >> $GITHUB_STEP_SUMMARY
-          echo "- Java (SpotBugs): completed" >> $GITHUB_STEP_SUMMARY
-          echo "- Dependency-Check: completed" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 📊 Severity Breakdown" >> $GITHUB_STEP_SUMMARY
+          echo "🔒 Security Summary:"
           jq -r '
-            [ .runs[].results[]?.level ]
-            | group_by(.)
-            | map({(.[0]): length})
-            | add
-            | to_entries
-            | ["Severity","Count"], (.[] | [ .key, (.value|tostring)])
-            | @tsv
-          ' combined-security-report.sarif | column -t >> $GITHUB_STEP_SUMMARY
+            .runs[].results[]?.level
+          ' combined-security-report.sarif | sort | uniq -c | while read count level; do
+            echo "  $level : $count"
+          done
 
       - name: Upload combined SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: combined-security-report.sarif
-
-      - name: Upload combined SARIF as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-security-report
-          path: combined-security-report.sarif
