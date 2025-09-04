@@ -16,7 +16,7 @@ class Person {
 }
 
 // Main class
-public class Main {
+class Main {
     public static void main(String[] args) {
         // Create an object
         Person person1 = new Person("Alice", 25);
