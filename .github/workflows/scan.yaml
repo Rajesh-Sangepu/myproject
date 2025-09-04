@@ -100,7 +100,9 @@ jobs:
 
       - name: Convert Bandit JSON to SARIF
         if: env.python_found == 'true'
-        run: python -m bandit_sarif_formatter bandit-results.json bandit-results.sarif
+        run: |
+          python -m pip install --user bandit-sarif-formatter
+          $HOME/.local/bin/bandit-sarif-formatter bandit-results.json bandit-results.sarif
 
   # ----------------------
   # Java Code Scan
@@ -226,6 +228,7 @@ jobs:
             }' "${files[@]}" > combined-security-report.sarif
           else
             echo '{"version":"2.1.0","runs":[]}' > combined-security-report.sarif
+          fi
 
       - name: Print Security Summary
         run: |
