@@ -38,7 +38,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Trivy vulnerability scan (SARIF only)
+      - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: repo
@@ -46,13 +46,20 @@ jobs:
           output: trivy-vuln-results.sarif
           exit-code: '0'
 
-      - name: Fail on HIGH/CRITICAL or fixed issues
+      - name: Fail based on severity & fix status
         run: |
           set -e
-          if jq -e '.runs[].results[] | select(.level=="error" or .level=="warning")' trivy-vuln-results.sarif > /dev/null; then
-            echo "❌ High/Critical issues detected"
-            exit 1
-          fi
+          echo "Checking Trivy vulnerabilities..."
+          jq -e '
+            .runs[].results[] |
+            select(
+              (.level == "error" or .level == "warning") and
+              (
+                (.properties.fixed != null and .properties.fixed != "") or
+                (.level == "error")
+              )
+            )
+          ' trivy-vuln-results.sarif > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
 
   # ----------------------
   # Python Code Scan
@@ -93,7 +100,7 @@ jobs:
 
       - name: Convert Bandit JSON to SARIF
         if: env.python_found == 'true'
-        run: bandit-sarif-formatter bandit-results.json bandit-results.sarif
+        run: python -m bandit_sarif_formatter bandit-results.json bandit-results.sarif
 
   # ----------------------
   # Java Code Scan
@@ -168,12 +175,20 @@ jobs:
             --cveValidForHours 24 \
             --noupdate || true
 
-      - name: Fail on HIGH/CRITICAL or fixed issues
+      - name: Fail based on severity & fix status
         run: |
-          if jq -e '.runs[].results[] | select(.level=="error" or .level=="warning")' dependency-check-report/dependency-check-report.sarif > /dev/null; then
-            echo "❌ Dependency-Check found blocking issues"
-            exit 1
-          fi
+          set -e
+          echo "Checking Dependency-Check vulnerabilities..."
+          jq -e '
+            .runs[].results[] |
+            select(
+              (.level == "error" or .level == "warning") and
+              (
+                (.properties.fixVersion != null and .properties.fixVersion != "") or
+                (.level == "error")
+              )
+            )
+          ' dependency-check-report/dependency-check-report.sarif > /dev/null && echo "❌ Failing due to HIGH/CRITICAL or fixable issues" && exit 1 || echo "✅ No blocking issues"
 
   # ----------------------
   # Security Summary & SARIF Upload
@@ -187,6 +202,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Ensure Git repository exists
+        run: |
+          if [ ! -d .git ]; then
+            git init
+            git remote add origin ${{ github.server_url }}/${{ github.repository }}
+            git fetch --depth=1 origin ${{ github.sha }}
+            git checkout FETCH_HEAD
+          fi
 
       - name: Merge SARIF reports
         run: |
@@ -202,7 +226,6 @@ jobs:
             }' "${files[@]}" > combined-security-report.sarif
           else
             echo '{"version":"2.1.0","runs":[]}' > combined-security-report.sarif
-          fi
 
       - name: Print Security Summary
         run: |
@@ -210,7 +233,12 @@ jobs:
           jq -r '
             .runs[].results[]?.level
           ' combined-security-report.sarif | sort | uniq -c | while read count level; do
-            echo "  $level : $count"
+            case $level in
+              note) severity=LOW;;
+              warning) severity=MEDIUM;;
+              error) severity=HIGH/CRITICAL;;
+            esac
+            echo "  $severity : $count"
           done
 
       - name: Upload combined SARIF to GitHub Security
