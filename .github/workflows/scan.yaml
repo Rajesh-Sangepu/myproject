@@ -171,6 +171,7 @@ jobs:
   security-summary:
     runs-on: ubuntu-latest
     needs: [trivy-vuln-scan, python-code-scan, dependency-check, java-code-scan]
+    if: always()   # <-- ensures summary runs even if scans fail
     steps:
       - name: Collect results summary
         run: |
